@@ -72,9 +72,3 @@ bool set_global_skia_font_manager_from_fonts_directory(const char* font_director
 
   return true;
 }
-
-
-std::vector<SkString> get_default_font_family_list()
-{
-  return {SkString{"FreeSans"}};
-}
