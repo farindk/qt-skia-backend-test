@@ -53,7 +53,8 @@ QVulkanInstance* get_vulkan_instance()
   static bool initialized = false;
 
   if (!initialized) {
-    sInstance.setLayers({"VK_LAYER_KHRONOS_validation"});
+    sInstance.setLayers({"VK_LAYER_KHRONOS_validation"}); // , "VK_LAYER_LUNARG_api_dump"});
+    sInstance.setApiVersion(QVersionNumber(1,1,0));
     if (!sInstance.create()) {
       std::cerr << "Failed to create Vulkan instance: " << sInstance.errorCode() << "\n";
       return nullptr;
@@ -157,7 +158,8 @@ void SkiaRenderer::initSkia()
   VkQueue queue = mWindow->graphicsQueue();
   uint32_t queueFamilyIndex = mWindow->graphicsQueueFamilyIndex();
 
-  // Fill in the Skia backend context
+  // --- Fill in the Skia backend context
+
   skgpu::VulkanBackendContext backendContext = {};
   backendContext.fInstance = vkInstance;
   backendContext.fPhysicalDevice = physicalDevice;
@@ -165,9 +167,53 @@ void SkiaRenderer::initSkia()
   backendContext.fQueue = queue;
   backendContext.fGraphicsQueueIndex = queueFamilyIndex;
 
-  // For fGetProc, you can usually use vkGetInstanceProcAddr.
-  // (If you use a custom loader, provide its function pointer here.)
   backendContext.fGetProc = my_get_proc; // vkGetInstanceProcAddr;
+
+  // fMaxAPIVersion
+
+  auto version = get_vulkan_instance()->apiVersion();
+  backendContext.fMaxAPIVersion = VK_MAKE_API_VERSION(0, version.majorVersion(), version.minorVersion(), version.microVersion());
+
+  // VkPhysicalDeviceFeatures
+
+  auto func_vkGetPhysicalDeviceFeatures = (void (*)(VkPhysicalDevice, VkPhysicalDeviceFeatures*))my_get_proc("vkGetPhysicalDeviceFeatures", vkInstance, vkDevice);
+
+  static VkPhysicalDeviceFeatures deviceFeatures;
+  (*func_vkGetPhysicalDeviceFeatures)(physicalDevice, &deviceFeatures);
+  deviceFeatures.robustBufferAccess = 0;
+  backendContext.fDeviceFeatures = &deviceFeatures;
+
+#if 0
+  VulkanBackendContext
+  --------------------
+    VkInstance                       fInstance = VK_NULL_HANDLE;
+    VkPhysicalDevice                 fPhysicalDevice = VK_NULL_HANDLE;
+    VkDevice                         fDevice = VK_NULL_HANDLE;
+    VkQueue                          fQueue = VK_NULL_HANDLE;
+    uint32_t                         fGraphicsQueueIndex = 0;
+    // The max api version set here should match the value set in VkApplicationInfo::apiVersion when
+    // then VkInstance was created.
+    uint32_t                         fMaxAPIVersion = 0;
+    const skgpu::VulkanExtensions*   fVkExtensions = nullptr;
+    // The client can create their VkDevice with either a VkPhysicalDeviceFeatures or
+    // VkPhysicalDeviceFeatures2 struct, thus we have to support taking both. The
+    // VkPhysicalDeviceFeatures2 struct is needed so we know if the client enabled any extension
+    // specific features. If fDeviceFeatures2 is not null then we ignore fDeviceFeatures. If both
+    // fDeviceFeatures and fDeviceFeatures2 are null we will assume no features are enabled.
+    const VkPhysicalDeviceFeatures*  fDeviceFeatures = nullptr;
+    const VkPhysicalDeviceFeatures2* fDeviceFeatures2 = nullptr;
+    // Optional. The client may provide an inplementation of a VulkanMemoryAllocator for Skia to use
+    // for allocating Vulkan resources that use VkDeviceMemory.
+    sk_sp<VulkanMemoryAllocator>     fMemoryAllocator;
+    skgpu::VulkanGetProc             fGetProc;
+    Protected                        fProtectedContext = Protected::kNo;
+    // Optional callback which will be invoked if a VK_ERROR_DEVICE_LOST error code is received from
+    // the driver. Debug information from the driver will be provided to the callback if the
+    // VK_EXT_device_fault extension is supported and enabled (VkPhysicalDeviceFaultFeaturesEXT must
+    // be in the pNext chain of VkDeviceCreateInfo).
+    skgpu::VulkanDeviceLostContext   fDeviceLostContext = nullptr;
+    skgpu::VulkanDeviceLostProc      fDeviceLostProc = nullptr;
+#endif
 
   // (Optionally, if needed, set fPhysicalDeviceFeatures, fDeviceFeatures, etc.)
 
@@ -209,7 +255,9 @@ void SkiaRenderer::paintVK()
   // You can obtain the current VkImage from the framebuffer, etc.
   // (See the QVulkanWindow documentation for details.)
 
-  int currentFrame = mWindow->currentFrame();
+  int currentFrame;
+  //currentFrame = mWindow->currentFrame();
+  currentFrame = mWindow->currentSwapChainImageIndex();
   printf("currentFrame: %d\n", currentFrame);
 
   // Suppose you have the VkImage and its info:
@@ -219,25 +267,34 @@ void SkiaRenderer::paintVK()
   // Construct Skia's VkImageInfo:
   GrVkImageInfo imageInfo;
   imageInfo.fImage = image;
+  imageInfo.fImageTiling = VK_IMAGE_TILING_OPTIMAL;
   imageInfo.fImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   imageInfo.fFormat = imageFormat;
-  imageInfo.fImageTiling = VK_IMAGE_TILING_OPTIMAL;
   // imageInfo.fCurrentQueueFamily =
   // You must also fill in other fields such as fLevelCount, fCurrentQueueFamily,
   // fAlloc, etc. Often you can copy some of these from your initialization or
   // query them from Qt’s VulkanWindow.
 
+#if 0
+    GrVkImageInfo
+    -------------
+    VkImage                           fImage = VK_NULL_HANDLE;
+    skgpu::VulkanAlloc                fAlloc;
+    VkImageTiling                     fImageTiling = VK_IMAGE_TILING_OPTIMAL;
+    VkImageLayout                     fImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkFormat                          fFormat = VK_FORMAT_UNDEFINED;
+    VkImageUsageFlags                 fImageUsageFlags = 0;
+    uint32_t                          fSampleCount = 1;
+    uint32_t                          fLevelCount = 0;
+    uint32_t                          fCurrentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+    skgpu::Protected                  fProtected = skgpu::Protected::kNo;
+    skgpu::VulkanYcbcrConversionInfo  fYcbcrConversionInfo;
+    VkSharingMode                     fSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+#endif
+
   int w = mWindow->swapChainImageSize().width();
   int h = mWindow->swapChainImageSize().height();
   printf("size: %d x %d\n", w, h);
-
-#if 0
-  // Create a GrBackendRenderTarget for Skia:
-  GrBackendRenderTarget backendRenderTarget(w, h,
-      /*sample count*/ 1,
-      /*stencil bits*/ 0,
-                                            imageInfo);
-#endif
 
   SkColorType colorType = kBGRA_8888_SkColorType; // or match your VkFormat
 
@@ -259,14 +316,10 @@ void SkiaRenderer::paintVK()
 
   draw_skia_scene(canvas);
 
+  // Flush Skia drawing commands.
+
   //m_grContext->submit();
   m_grContext->flushAndSubmit();
-
-  // Flush Skia drawing commands.
-  // m_surface->flushAndSubmit();
-
-  // Optionally, record and submit your Vulkan command buffer that incorporates
-  // the Skia drawing operations.
 }
 
 
